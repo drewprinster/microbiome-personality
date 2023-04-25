@@ -1,0 +1,258 @@
+---
+title: "20220826_TwinsUKDiversityRegresssions_R"
+author: "Drew Prinster"
+date: '2022-08-26'
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 20220826_TwinsUKDiversityRegresssions_R
+
+```{r}
+# Packages
+# install.packages("lme4", repos=c("http://lme4.r-forge.r-project.org/repos", getOption("repos")[["CRAN"]]))
+library(lme4)
+# install.packages("clubSandwich")
+library(clubSandwich)
+#install.packages("aod")
+library(aod)
+
+# install.packages("circlize")
+library(circlize)
+#install.packages("vegan")
+library(vegan)
+
+library(igraph)
+
+#install.packages("doBy")
+#library(doBy)
+#install.packages("remotes")
+#remotes::install_github("microbiota/amplicon")
+```
+
+### Visualization
+
+```{r}
+mb_species_data <- read.csv("0.001_percent_total_otu_table.csv", header=TRUE)[2:1628]
+mb_species_data <- mb_species_data[rowSums(mb_species_data[])>0,]
+N <- dim(mb_species_data)[1]
+L <- dim(mb_species_data)[2]
+
+b = 1 / 1000
+E = - b + (2 * b * matrix(runif(N * L),nrow=N))
+mb_species_noisy <- mb_species_data + E
+mb_species_noisy
+```
+
+
+```{r}
+mb_species_data <- read.csv("0.001_percent_total_otu_table.csv", header=TRUE)[2:1628]
+mb_species_data <- mb_species_data[rowSums(mb_species_data[])>0,]
+
+mb_species_rel <- sweep(mb_species_data,2,colSums(mb_species_data),FUN="/")
+
+k = 100
+topk = which.maxn(rowSums(mb_species_rel), k)
+mb_species_rel <- mb_species_rel[topk, ]
+
+# mb_species_data <- data.frame(read.csv("20220413_CLASSO_X_001_withPCs.csv")[2:1223])
+dim(mb_species_rel)
+braycurtis = as.matrix(vegdist(mb_species_rel, "bray"))
+braycurtis[1:5, 1:5]
+hist(braycurtis)
+```
+
+
+
+```{r}
+adj_matrix = (1-as.matrix(braycurtis) - diag(dim(mb_species_rel)[1]))
+#print(quantile(adj_matrix, 0.99))
+#adj_matrix[adj_matrix < quantile(adj_matrix, 0.99)] <- 0
+
+g <- graph_from_adjacency_matrix(adj_matrix, mode="upper", weighted=TRUE)
+#co <- cluster_leading_eigen(g, weights = E(g)$weight)
+
+weights <- E(g)$weight
+#g2 <- delete.edges(g, which(E(g)$weight<quantile(E(g)$weight, 0.95)))
+
+
+plot(g2, edge.weight = E(g2)$weight, edge.width=E(g2)$weight, weighted=TRUE)
+
+```
+
+
+```{r}
+## Read data
+data_individuals <- read.csv("20220826_individuals_df.csv")
+data_MZ <- read.csv("20220830_MZ_df.csv")
+data_DZ <- read.csv("20220830_DZ_df.csv")
+data_all <- read.csv("20220830_MZ_DZ_df.csv")
+data_all
+```
+
+```{r}
+## Regressions with twins as individuals
+HEXACO_names = c('HEX_Honesty_Humility_corrected', 'Hex_Sincerity_corrected', 'Hex_Fairness_corrected', 'Hex_Greed_Avoidance_corrrected', 'Hex_Modesty_corrected', 'HEX_Emotionality_corrected', 'Hex_Fearfulness_corrected', 'Hex_Anxiety_corrected', 'Hex_Dependence_corrected', 'Hex_Sentimentality_corrected', 'HEX_Extraversion_corrected', 'Hex_Social_Self_Esteem_corrected', 'Hex_Social_Boldness_corrected', 'Hex_Sociability_corrected', 'Hex_Liveliness_corrected', 'HEX_Agreeableness_corrected', 'Hex_Forgiveness_corrected', 'Hex_Gentleness_corrected', 'Hex_Flexibility_corrected', 'Hex_Patience_corrected', 'HEX_Conscientiousness_corrected', 'Hex_Organization_corrected', 'Hex_Diligence_corrected', 'Hex_Perfectionism_corrected', 'Hex_Prudence_corrected', 'HEX_Openness_corrected', 'Hex_Aesthetic_Appreciation_corrected', 'Hex_Inquistiveness_corrected', 'Hex_Creativity_corrected', 'Hex_Unconventionality_corrected')
+
+for (i in 1:30) {
+  print(HEXACO_names[i])
+  data_individuals_i = data_individuals[, c(HEXACO_names[i], "Shannon", "AGE_AT_SURVEY", "SEX_M", "TwinID_num")]
+  names(data_individuals_i)[names(data_individuals_i) == HEXACO_names[i]] <- 'y'
+  data_individuals_i = data_individuals_i[complete.cases(data_individuals_i), ]
+  results = glm(y ~ Shannon + AGE_AT_SURVEY + SEX_M + (1 | TwinID_num), data = data_individuals_i, na.action = na.omit)
+  print(summary(results))
+  print("------------------------------------------------------------------------------")
+}
+
+```
+
+
+```{r}
+## Function for twin pair analyses
+run_twin_pair_analyses <- function(HEXACO_name, data_MZ, data_DZ) {
+  ## MZ
+  print(HEXACO_name)
+  print("~~~~~~~~~~~~~~~~~~~~~~~~ MZ results ~~~~~~~~~~~~~~~~~~~~~~~~")
+  data_MZ_i = data_MZ[, c(HEXACO_name, "Shannon_mean", "Shannon_dif", "Age", "Sex")]
+  names(data_MZ_i)[names(data_MZ_i) == HEXACO_name] <- 'y'
+  data_MZ_i = data_MZ_i[complete.cases(data_MZ_i), ]
+  results_MZ = lm(y ~ Shannon_mean + Shannon_dif + Age + Sex, data = data_MZ_i, na.action = na.omit)
+  print(summary(results_MZ))
+
+  ## MZ Wald test for |Beta_W| = |Beta_B|
+  cov_sub_MZ <- vcov(results_MZ)[c("Shannon_mean", "Shannon_dif"), c("Shannon_mean", "Shannon_dif")]
+  coefs_MZ <- coef(results_MZ)
+  abs_coefs_MZ <- c(abs(coefs_MZ["Shannon_mean"]), abs(coefs_MZ["Shannon_dif"]))
+  R <- cbind(1, -1)
+  print("MZ Wald test for |Beta_W| = |Beta_B| : ")
+  print(wald.test(Sigma = cov_sub_MZ, b = abs_coefs_MZ, L = R))
+  
+  
+  ## DZ
+  print("~~~~~~~~~~~~~~~~~~~~~~~~ DZ results ~~~~~~~~~~~~~~~~~~~~~~~~")
+  data_DZ_i = data_DZ[, c(HEXACO_name, "Shannon_mean", "Shannon_dif", "Age", "Sex")]
+  names(data_DZ_i)[names(data_DZ_i) == HEXACO_name] <- 'y'
+  data_DZ_i = data_DZ_i[complete.cases(data_DZ_i), ]
+  results_DZ = lm(y ~ Shannon_mean + Shannon_dif + Age + Sex, data = data_DZ_i, na.action = na.omit)
+  print(summary(results_DZ))
+
+  ## DZ Wald test for |Beta_W| = |Beta_B|
+  cov_sub_DZ <- vcov(results_DZ)[c("Shannon_mean", "Shannon_dif"), c("Shannon_mean", "Shannon_dif")]
+  coefs_DZ <- coef(results_DZ)
+  abs_coefs_DZ <- c(abs(coefs_DZ["Shannon_mean"]), abs(coefs_DZ["Shannon_dif"]))
+  R <- cbind(1, -1)
+  print("DZ Wald test for |Beta_W| = |Beta_B| : ")
+  print(wald.test(Sigma = cov_sub_DZ, b = abs_coefs_DZ, L = R))
+  
+  
+  ## Wald tests comparing MZ and DZ coefficients
+  print("~~~~~~~~~~~~~~~~~~~~~~ Wald test for |Beta_B| [MZ] = |Beta_B| [DZ] ~~~~~~~~~~~~~~~~~~~~ ")
+  var_mat_B <- matrix(c(cov_sub_MZ["Shannon_mean","Shannon_mean"], 0, 0, cov_sub_DZ["Shannon_mean","Shannon_mean"]), nrow=2, ncol=2, byrow=TRUE)
+  print(wald.test(Sigma = var_mat_B, b = c(coefs_MZ["Shannon_mean"], coefs_DZ["Shannon_mean"]), L = R))
+  
+  print("~~~~~~~~~~~~~~~~~~~~~~ Wald test for |Beta_W| [MZ] = |Beta_W| [DZ] ~~~~~~~~~~~~~~~~~~~~ ")
+  var_mat_W <- matrix(c(cov_sub_MZ["Shannon_dif","Shannon_dif"], 0, 0, cov_sub_DZ["Shannon_dif","Shannon_dif"]), nrow=2, ncol=2, byrow=TRUE)
+  print(wald.test(Sigma = var_mat_W, b = c(coefs_MZ["Shannon_dif"], coefs_DZ["Shannon_dif"]), L = R))
+
+  
+  print("---------------------------------------------------------------------------------------------------------------")
+}
+
+
+## Function for twin pair analyses for all data together
+run_twin_pair_analyses_all_data <- function(HEXACO_name, data_all) {
+  print(HEXACO_name)
+  print("~~~~~~~~~~~~~~~~~~~~~~~~ Results for MZ and DZ together ~~~~~~~~~~~~~~~~~~~~~~~~")
+  data_all_i = data_all[, c(HEXACO_name, "Shannon_mean", "Shannon_dif", "Age", "Sex", "MZ_indicator")]
+  names(data_all_i)[names(data_all_i) == HEXACO_name] <- 'y'
+  data_all_i = data_all_i[complete.cases(data_all_i), ]
+  results_all = lm(y ~ Shannon_mean + Shannon_dif + Age + Sex, data = data_all_i, na.action = na.omit) # + MZ_indicator + Shannon_mean:MZ_indicator + Shannon_dif:MZ_indicator
+  print(summary(results_all))
+
+  ## Wald test for |Beta_W| = |Beta_B|
+  cov_sub_all <- vcov(results_all)[c("Shannon_mean", "Shannon_dif"), c("Shannon_mean", "Shannon_dif")]
+  coefs_all <- coef(results_all)
+  abs_coefs_all <- c(abs(coefs_all["Shannon_mean"]), abs(coefs_all["Shannon_dif"]))
+  R <- cbind(1, -1)
+  print("all Wald test for |Beta_W| = |Beta_B| : ")
+  print(wald.test(Sigma = cov_sub_all, b = abs_coefs_all, L = R))
+  
+  
+  print("---------------------------------------------------------------------------------------------------------------")
+}
+
+
+```
+
+```{r}
+data_all
+```
+
+```{r}
+## Honesty-Humility traits twin pair analyses
+names = c('HEX_Honesty_Humility_corrected', 'Hex_Sincerity_corrected', 'Hex_Fairness_corrected', 'Hex_Greed_Avoidance_corrrected', 'Hex_Modesty_corrected')
+
+for (i in 1:5) {
+  #run_twin_pair_analyses(names[i], data_MZ, data_DZ)
+  run_twin_pair_analyses_all_data(names[i], data_all)
+
+}
+```
+
+
+```{r}
+## Emotionality traits twin pair analyses
+names = c('HEX_Emotionality_corrected', 'Hex_Fearfulness_corrected', 'Hex_Anxiety_corrected', 'Hex_Dependence_corrected', 'Hex_Sentimentality_corrected')
+
+for (i in 1:5) {
+  # run_twin_pair_analyses(names[i], data_MZ, data_DZ)
+  run_twin_pair_analyses_all_data(names[i], data_all)
+}
+```
+
+```{r}
+## Extraversion traits twin pair analyses
+names = c('HEX_Extraversion_corrected', 'Hex_Social_Self_Esteem_corrected', 'Hex_Social_Boldness_corrected', 'Hex_Sociability_corrected', 'Hex_Liveliness_corrected')
+
+for (i in 1:5) {
+  # run_twin_pair_analyses(names[i], data_MZ, data_DZ)
+  run_twin_pair_analyses_all_data(names[i], data_all)
+}
+```
+
+```{r}
+## Agreeableness traits twin pair analyses
+names = c('HEX_Agreeableness_corrected', 'Hex_Forgiveness_corrected', 'Hex_Gentleness_corrected', 'Hex_Flexibility_corrected', 'Hex_Patience_corrected')
+
+for (i in 1:5) {
+  # run_twin_pair_analyses(names[i], data_MZ, data_DZ)
+  run_twin_pair_analyses_all_data(names[i], data_all)
+}
+```
+
+```{r}
+## Conscientiousness traits twin pair analyses
+names = c('HEX_Conscientiousness_corrected', 'Hex_Organization_corrected', 'Hex_Diligence_corrected', 'Hex_Perfectionism_corrected', 'Hex_Prudence_corrected')
+
+for (i in 1:5) {
+  # run_twin_pair_analyses(names[i], data_MZ, data_DZ)
+  run_twin_pair_analyses_all_data(names[i], data_all)
+}
+```
+
+```{r}
+dim(data_DZ)
+```
+
+```{r}
+## Openness traits twin pair analyses
+names = c('HEX_Openness_corrected', 'Hex_Aesthetic_Appreciation_corrected', 'Hex_Inquistiveness_corrected', 'Hex_Creativity_corrected', 'Hex_Unconventionality_corrected')
+
+for (i in 1:5) {
+  # run_twin_pair_analyses(names[i], data_MZ, data_DZ)
+  run_twin_pair_analyses_all_data(names[i], data_all)
+}
+```
